@@ -1,24 +1,43 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.24-alpine AS build
+# Use Node.js 20 Alpine for smaller image size
+FROM node:20-alpine
 
-# Set destination for COPY
+# Set working directory
 WORKDIR /app
 
-# Download any Go modules
-COPY container_src/go.mod ./
-RUN go mod download
+# Install system dependencies
+RUN apk add --no-cache \
+    git \
+    curl \
+    ca-certificates
 
-# Copy container source code
-COPY container_src/*.go ./
+# Install global npm packages for MCP, Agents, and development tools
+RUN npm install -g \
+    @modelcontextprotocol/sdk \
+    @anthropic-ai/sdk \
+    @cloudflare/ai \
+    agents \
+    zod \
+    typescript \
+    tsx \
+    wrangler \
+    && npm cache clean --force
 
-# Build
-RUN CGO_ENABLED=0 GOOS=linux go build -o /server
+# Copy package files if they exist
+COPY package*.json ./
 
-FROM scratch
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=build /server /server
+# Install project dependencies (if package.json exists)
+RUN if [ -f package.json ]; then npm install; fi
+
+# Copy application source code
+COPY . .
+
+# Build TypeScript if tsconfig.json exists
+RUN if [ -f tsconfig.json ]; then npm run build 2>/dev/null || tsc 2>/dev/null || true; fi
+
+# Expose port for the application
 EXPOSE 8080
 
-# Run
-CMD ["/server"]
+# Default command - can be overridden
+CMD ["node", "index.js"]
