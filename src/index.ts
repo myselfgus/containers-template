@@ -1,5 +1,6 @@
 import { Container, getContainer, getRandom } from "@cloudflare/containers";
 import { Hono } from "hono";
+import { ContainerManagerRPC } from "./rpc";
 
 export class MyContainer extends Container<Env> {
 	// Port the container listens on (default: 8080)
@@ -24,6 +25,9 @@ export class MyContainer extends Container<Env> {
 		console.log("Container error:", error);
 	}
 }
+
+// Export RPC class for service bindings
+export { ContainerManagerRPC };
 
 // Create Hono app with proper typing for Cloudflare Workers
 const app = new Hono<{
@@ -65,6 +69,66 @@ app.get("/lb", async (c) => {
 app.get("/singleton", async (c) => {
 	const container = getContainer(c.env.MY_CONTAINER);
 	return await container.fetch(c.req.raw);
+});
+
+// Health check endpoint for container initialization
+app.get("/health", (c) => {
+	return c.json({ status: "healthy", timestamp: Date.now() });
+});
+
+// Execute command in container
+app.post("/exec", async (c) => {
+	try {
+		const { command } = await c.req.json();
+		// This would execute in the actual container runtime
+		// For now, return mock response
+		return c.json({
+			output: `Executed: ${command}`,
+			success: true
+		});
+	} catch (error) {
+		return c.json({
+			error: error instanceof Error ? error.message : 'Unknown error',
+			success: false
+		}, 500);
+	}
+});
+
+// Write file to container filesystem
+app.post("/write-file", async (c) => {
+	try {
+		const { path, content } = await c.req.json();
+		// This would write to container filesystem
+		// For now, return success
+		return c.json({
+			success: true,
+			path,
+			bytes: content.length
+		});
+	} catch (error) {
+		return c.json({
+			error: error instanceof Error ? error.message : 'Unknown error',
+			success: false
+		}, 500);
+	}
+});
+
+// Read file from container filesystem
+app.post("/read-file", async (c) => {
+	try {
+		const { path } = await c.req.json();
+		// This would read from container filesystem
+		// For now, return mock content
+		return c.json({
+			content: `// Built MCP server from ${path}`,
+			success: true
+		});
+	} catch (error) {
+		return c.json({
+			error: error instanceof Error ? error.message : 'Unknown error',
+			success: false
+		}, 500);
+	}
 });
 
 export default app;
