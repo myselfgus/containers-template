@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 	/**
 	 * Create SDK environment for building an MCP server
+	 * Copies remote-mcp-authless template and personalizes it for the new server
 	 * Returns container ID that can be used for subsequent build operations
 	 */
 	async createSDKEnvironment(serverId: string, dependencies: string[] = []) {
@@ -15,11 +16,79 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const id = this.env.MY_CONTAINER.idFromName(containerId);
 			const container = this.env.MY_CONTAINER.get(id);
 
-			// Initialize container with health check
-			const response = await container.fetch('http://container/health');
+			// Container initialized via RPC binding - no fetch needed
 
-			if (!response.ok) {
-				throw new Error('Container failed to start');
+			// Create workspace directory for this server
+			const workspacePath = `/workspace/${serverId}`;
+			await this.executeInContainer(containerId, `mkdir -p ${workspacePath}`, serverId);
+
+			// Copy remote-mcp-authless template to workspace
+			const copyResult = await this.executeInContainer(
+				containerId,
+				`cp -r /templates/remote-mcp-authless/* ${workspacePath}/`,
+				serverId
+			);
+
+			if (!copyResult.success) {
+				throw new Error('Failed to copy template: ' + copyResult.error);
+			}
+
+			// Read template files to personalize
+			const indexResponse = await container.fetch('http://container/read-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ path: `${workspacePath}/src/index.ts` })
+			});
+			const indexData = await indexResponse.json() as { content?: string; error?: string };
+
+			if (indexData.error || !indexData.content) {
+				throw new Error('Failed to read template index.ts');
+			}
+
+			// Personalize the template: rename class and server name
+			const className = serverId.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+			let personalizedIndex = indexData.content
+				.replace(/class MyMCP/g, `class ${className}MCP`)
+				.replace(/MyMCP\.serveSSE/g, `${className}MCP.serveSSE`)
+				.replace(/MyMCP\.serve/g, `${className}MCP.serve`)
+				.replace(/name: "Authless Calculator"/g, `name: "${serverId}"`)
+				.replace(/version: "1\.0\.0"/g, `version: "1.0.0"`)
+				// Remove example tools (add, calculate)
+				.replace(/\/\/ Simple addition tool[\s\S]*?\}\);/g, '// Add your tools here using this.server.tool()')
+				.replace(/\/\/ Calculator tool[\s\S]*?\}\,?\s*\);/g, '');
+
+			// Write personalized index.ts
+			await container.fetch('http://container/write-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					path: `${workspacePath}/src/index.ts`,
+					content: personalizedIndex
+				})
+			});
+
+			// Read and personalize wrangler.jsonc
+			const wranglerResponse = await container.fetch('http://container/read-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ path: `${workspacePath}/wrangler.jsonc` })
+			});
+			const wranglerData = await wranglerResponse.json() as { content?: string; error?: string };
+
+			if (wranglerData.content) {
+				const personalizedWrangler = wranglerData.content
+					.replace(/"name": "remote-mcp-server-authless"/g, `"name": "${serverId}"`)
+					.replace(/"new_sqlite_classes": \["MyMCP"\]/g, `"new_sqlite_classes": ["${className}MCP"]`)
+					.replace(/"class_name": "MyMCP"/g, `"class_name": "${className}MCP"`);
+
+				await container.fetch('http://container/write-file', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						path: `${workspacePath}/wrangler.jsonc`,
+						content: personalizedWrangler
+					})
+				});
 			}
 
 			// Record in D1
@@ -38,7 +107,9 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			return {
 				success: true,
 				containerId,
+				workspacePath,
 				ready: true,
+				template: 'remote-mcp-authless',
 				sdks: ['@modelcontextprotocol/sdk', 'agents', 'zod', 'typescript', 'wrangler'],
 				dependencies
 			};
@@ -119,35 +190,35 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 
 	/**
 	 * Build MCP server in container
-	 * Takes TypeScript code, builds it, and returns bundled worker script
+	 * Reads from workspace, installs dependencies, builds with wrangler
 	 */
 	async buildMCPServer(containerId: string, serverId: string, code: { [filename: string]: string }) {
 		try {
 			const buildId = nanoid();
+			const workspacePath = `/workspace/${serverId}`;
 
-			// Create build directory
-			await this.executeInContainer(containerId, 'mkdir -p /tmp/build', serverId);
+			// If code is provided (legacy), write it to workspace (shouldn't happen with new flow)
+			if (code && Object.keys(code).length > 0) {
+				console.warn('buildMCPServer received code - this should not happen with new flow');
+				for (const [filename, content] of Object.entries(code)) {
+					const id = this.env.MY_CONTAINER.idFromName(containerId);
+					const container = this.env.MY_CONTAINER.get(id);
 
-			// Write all code files
-			for (const [filename, content] of Object.entries(code)) {
-				// Write file via container API
-				const id = this.env.MY_CONTAINER.idFromName(containerId);
-				const container = this.env.MY_CONTAINER.get(id);
-
-				await container.fetch('http://container/write-file', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						path: `/tmp/build/${filename}`,
-						content
-					})
-				});
+					await container.fetch('http://container/write-file', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							path: `${workspacePath}/${filename}`,
+							content
+						})
+					});
+				}
 			}
 
-			// Install dependencies
+			// Install dependencies from workspace
 			const installResult = await this.executeInContainer(
 				containerId,
-				'cd /tmp/build && npm install',
+				`cd ${workspacePath} && npm install`,
 				serverId
 			);
 
@@ -158,10 +229,10 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 				};
 			}
 
-			// Build with wrangler
+			// Build with wrangler from workspace
 			const buildResult = await this.executeInContainer(
 				containerId,
-				'cd /tmp/build && npx wrangler deploy --dry-run --outdir=/tmp/dist',
+				`cd ${workspacePath} && npx wrangler deploy --dry-run --outdir=/tmp/dist`,
 				serverId
 			);
 
@@ -225,6 +296,177 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			};
 		} catch (error) {
 			console.error('Failed to list containers:', error);
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : 'Unknown error'
+			};
+		}
+	}
+
+	/**
+	 * Add tool to MCP server in container
+	 * Modifies the src/index.ts file to include the new tool
+	 */
+	async addToolToServer(containerId: string, serverId: string, toolName: string, toolCode: string) {
+		try {
+			const workspacePath = `/workspace/${serverId}`;
+
+			// Read current index.ts
+			const id = this.env.MY_CONTAINER.idFromName(containerId);
+			const container = this.env.MY_CONTAINER.get(id);
+
+			const response = await container.fetch('http://container/read-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ path: `${workspacePath}/src/index.ts` })
+			});
+
+			const data = await response.json() as { content?: string; error?: string };
+
+			if (data.error || !data.content) {
+				throw new Error('Failed to read index.ts: ' + data.error);
+			}
+
+			// Find the init() method and add tool before closing brace
+			const initRegex = /async init\(\) \{([\s\S]*?)\n\t\}/;
+			const match = data.content.match(initRegex);
+
+			if (!match) {
+				throw new Error('Could not find init() method in index.ts');
+			}
+
+			const existingInitContent = match[1];
+			const updatedInitContent = `async init() {${existingInitContent}\n\n\t\t${toolCode}\n\t}`;
+			const updatedIndex = data.content.replace(initRegex, updatedInitContent);
+
+			// Write updated index.ts
+			await container.fetch('http://container/write-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					path: `${workspacePath}/src/index.ts`,
+					content: updatedIndex
+				})
+			});
+
+			return {
+				success: true,
+				message: `Tool '${toolName}' added to ${workspacePath}/src/index.ts`
+			};
+		} catch (error) {
+			console.error('Failed to add tool to server:', error);
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : 'Unknown error'
+			};
+		}
+	}
+
+	/**
+	 * Add resource to MCP server in container
+	 * Modifies the src/index.ts file to include the new resource
+	 */
+	async addResourceToServer(containerId: string, serverId: string, resourceCode: string) {
+		try {
+			const workspacePath = `/workspace/${serverId}`;
+
+			const id = this.env.MY_CONTAINER.idFromName(containerId);
+			const container = this.env.MY_CONTAINER.get(id);
+
+			const response = await container.fetch('http://container/read-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ path: `${workspacePath}/src/index.ts` })
+			});
+
+			const data = await response.json() as { content?: string; error?: string };
+
+			if (data.error || !data.content) {
+				throw new Error('Failed to read index.ts: ' + data.error);
+			}
+
+			const initRegex = /async init\(\) \{([\s\S]*?)\n\t\}/;
+			const match = data.content.match(initRegex);
+
+			if (!match) {
+				throw new Error('Could not find init() method in index.ts');
+			}
+
+			const existingInitContent = match[1];
+			const updatedInitContent = `async init() {${existingInitContent}\n\n\t\t${resourceCode}\n\t}`;
+			const updatedIndex = data.content.replace(initRegex, updatedInitContent);
+
+			await container.fetch('http://container/write-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					path: `${workspacePath}/src/index.ts`,
+					content: updatedIndex
+				})
+			});
+
+			return {
+				success: true,
+				message: `Resource added to ${workspacePath}/src/index.ts`
+			};
+		} catch (error) {
+			console.error('Failed to add resource to server:', error);
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : 'Unknown error'
+			};
+		}
+	}
+
+	/**
+	 * Add prompt to MCP server in container
+	 * Modifies the src/index.ts file to include the new prompt
+	 */
+	async addPromptToServer(containerId: string, serverId: string, promptCode: string) {
+		try {
+			const workspacePath = `/workspace/${serverId}`;
+
+			const id = this.env.MY_CONTAINER.idFromName(containerId);
+			const container = this.env.MY_CONTAINER.get(id);
+
+			const response = await container.fetch('http://container/read-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ path: `${workspacePath}/src/index.ts` })
+			});
+
+			const data = await response.json() as { content?: string; error?: string };
+
+			if (data.error || !data.content) {
+				throw new Error('Failed to read index.ts: ' + data.error);
+			}
+
+			const initRegex = /async init\(\) \{([\s\S]*?)\n\t\}/;
+			const match = data.content.match(initRegex);
+
+			if (!match) {
+				throw new Error('Could not find init() method in index.ts');
+			}
+
+			const existingInitContent = match[1];
+			const updatedInitContent = `async init() {${existingInitContent}\n\n\t\t${promptCode}\n\t}`;
+			const updatedIndex = data.content.replace(initRegex, updatedInitContent);
+
+			await container.fetch('http://container/write-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					path: `${workspacePath}/src/index.ts`,
+					content: updatedIndex
+				})
+			});
+
+			return {
+				success: true,
+				message: `Prompt added to ${workspacePath}/src/index.ts`
+			};
+		} catch (error) {
+			console.error('Failed to add prompt to server:', error);
 			return {
 				success: false,
 				error: error instanceof Error ? error.message : 'Unknown error'
