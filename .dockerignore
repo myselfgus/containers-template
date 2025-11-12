@@ -1,0 +1,55 @@
+# Node modules - será reinstalado no build
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build outputs
+dist/
+*.js.map
+*.d.ts.map
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+.nyc_output/
+*.test.ts
+*.spec.ts
+test/
+tests/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Documentation (não precisa na imagem)
+*.md
+!TEMPLATES_GUIDE.md
+
+# Wrangler local
+.wrangler/
+.dev.vars
+.mf/
+
+# Logs
+logs/
+*.log
+
+# Temporary
+tmp/
+temp/

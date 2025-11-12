@@ -3,13 +3,13 @@ import { Hono } from "hono";
 import { ContainerManagerRPC } from "./rpc";
 
 export class MyContainer extends Container<Env> {
-	// Port the container listens on (default: 8080)
-	defaultPort = 8080;
 	// Time before container sleeps due to inactivity (default: 30s)
 	sleepAfter = "2m";
-	// Environment variables passed to the container
+	// Environment variables for MCP templates
 	envVars = {
-		MESSAGE: "I was passed in via the container class!",
+		MCP_TEMPLATES_PATH: "/templates",
+		CLOUDFLARE_WORKERS: "true",
+		NODE_ENV: "production",
 	};
 
 	// Optional lifecycle hooks
