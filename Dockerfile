@@ -19,12 +19,16 @@ FROM base AS globals
 RUN npm install -g \
     @modelcontextprotocol/sdk \
     @anthropic-ai/sdk \
+    @anthropic-ai/claude-agent-sdk \
     @cloudflare/ai \
     agents \
     zod \
     typescript \
     tsx \
     wrangler \
+    openai \
+    @langchain/core \
+    @langchain/openai \
     && npm cache clean --force
 
 # Stage 2: Build application dependencies
@@ -69,6 +73,17 @@ COPY agents/agent-task-manager /templates/agent-task-manager
 COPY agents/routing /templates/routing
 COPY agents/parallelisation /templates/parallelisation
 COPY agents/e2e /templates/e2e
+
+# Install dependencies for each template
+RUN for template in /templates/*/; do \
+    if [ -f "$template/package.json" ]; then \
+        echo "Installing dependencies for $template"; \
+        cd "$template" && npm install --omit=dev && npm cache clean --force; \
+    fi \
+done
+
+# Return to app directory
+WORKDIR /app
 
 # Create a templates manifest for easy discovery by LLM
 RUN echo '{\n\

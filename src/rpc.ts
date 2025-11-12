@@ -16,8 +16,6 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const id = this.env.MY_CONTAINER.idFromName(containerId);
 			const container = this.env.MY_CONTAINER.get(id);
 
-			// Container initialized via RPC binding - no fetch needed
-
 			// Create workspace directory for this server
 			const workspacePath = `/workspace/${serverId}`;
 			await this.executeInContainer(containerId, `mkdir -p ${workspacePath}`, serverId);
@@ -34,14 +32,9 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			}
 
 			// Read template files to personalize
-			const indexResponse = await container.fetch('http://container/read-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ path: `${workspacePath}/src/index.ts` })
-			});
-			const indexData = await indexResponse.json() as { content?: string; error?: string };
+			const indexData = await container.readFile(`${workspacePath}/src/index.ts`);
 
-			if (indexData.error || !indexData.content) {
+			if (!indexData.success || !indexData.content) {
 				throw new Error('Failed to read template index.ts');
 			}
 
@@ -58,51 +51,19 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 				.replace(/\/\/ Calculator tool[\s\S]*?\}\,?\s*\);/g, '');
 
 			// Write personalized index.ts
-			await container.fetch('http://container/write-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					path: `${workspacePath}/src/index.ts`,
-					content: personalizedIndex
-				})
-			});
+			await container.writeFile(`${workspacePath}/src/index.ts`, personalizedIndex);
 
 			// Read and personalize wrangler.jsonc
-			const wranglerResponse = await container.fetch('http://container/read-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ path: `${workspacePath}/wrangler.jsonc` })
-			});
-			const wranglerData = await wranglerResponse.json() as { content?: string; error?: string };
+			const wranglerData = await container.readFile(`${workspacePath}/wrangler.jsonc`);
 
-			if (wranglerData.content) {
+			if (wranglerData.success && wranglerData.content) {
 				const personalizedWrangler = wranglerData.content
 					.replace(/"name": "remote-mcp-server-authless"/g, `"name": "${serverId}"`)
 					.replace(/"new_sqlite_classes": \["MyMCP"\]/g, `"new_sqlite_classes": ["${className}MCP"]`)
 					.replace(/"class_name": "MyMCP"/g, `"class_name": "${className}MCP"`);
 
-				await container.fetch('http://container/write-file', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						path: `${workspacePath}/wrangler.jsonc`,
-						content: personalizedWrangler
-					})
-				});
+				await container.writeFile(`${workspacePath}/wrangler.jsonc`, personalizedWrangler);
 			}
-
-			// Record in D1
-			await this.env.DB.prepare(`
-				INSERT INTO container_executions (id, server_id, container_id, command, status, started_at)
-				VALUES (?, ?, ?, ?, ?, ?)
-			`).bind(
-				nanoid(),
-				serverId,
-				containerId,
-				'initialize',
-				'completed',
-				Date.now()
-			).run();
 
 			return {
 				success: true,
@@ -149,35 +110,27 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const id = this.env.MY_CONTAINER.idFromName(containerId);
 			const container = this.env.MY_CONTAINER.get(id);
 
-			// Execute command via container's exec endpoint
-			const response = await container.fetch('http://container/exec', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ command })
-			});
-
-			const result = await response.json() as { output?: string; error?: string };
+			// Execute command via RPC helper (no HTTP port required)
+			const result = await container.execCommand(command);
 
 			// Update execution record
 			if (serverId) {
 				await this.env.DB.prepare(`
 					UPDATE container_executions
-					SET status = ?, output = ?, error = ?, completed_at = ?
+					SET status = ?, output = ?, completed_at = ?
 					WHERE id = ?
 				`).bind(
-					result.error ? 'failed' : 'completed',
+					result.success ? 'completed' : 'failed',
 					result.output || null,
-					result.error || null,
 					Date.now(),
 					executionId
 				).run();
 			}
 
 			return {
-				success: !result.error,
+				success: result.success,
 				executionId,
 				output: result.output,
-				error: result.error
 			};
 		} catch (error) {
 			console.error('Failed to execute in container:', error);
@@ -204,14 +157,7 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 					const id = this.env.MY_CONTAINER.idFromName(containerId);
 					const container = this.env.MY_CONTAINER.get(id);
 
-					await container.fetch('http://container/write-file', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							path: `${workspacePath}/${filename}`,
-							content
-						})
-					});
+					await container.writeFile(`${workspacePath}/${filename}`, content);
 				}
 			}
 
@@ -247,18 +193,12 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const id = this.env.MY_CONTAINER.idFromName(containerId);
 			const container = this.env.MY_CONTAINER.get(id);
 
-			const scriptResponse = await container.fetch('http://container/read-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ path: '/tmp/dist/index.js' })
-			});
+			const scriptData = await container.readFile('/tmp/dist/index.js');
 
-			const scriptData = await scriptResponse.json() as { content?: string; error?: string };
-
-			if (scriptData.error) {
+			if (!scriptData.success || !scriptData.content) {
 				return {
 					success: false,
-					error: 'Failed to read built script: ' + scriptData.error
+					error: 'Failed to read built script'
 				};
 			}
 
@@ -315,16 +255,10 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const id = this.env.MY_CONTAINER.idFromName(containerId);
 			const container = this.env.MY_CONTAINER.get(id);
 
-			const response = await container.fetch('http://container/read-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ path: `${workspacePath}/src/index.ts` })
-			});
+			const data = await container.readFile(`${workspacePath}/src/index.ts`);
 
-			const data = await response.json() as { content?: string; error?: string };
-
-			if (data.error || !data.content) {
-				throw new Error('Failed to read index.ts: ' + data.error);
+			if (!data.success || !data.content) {
+				throw new Error('Failed to read index.ts');
 			}
 
 			// Find the init() method and add tool before closing brace
@@ -340,14 +274,7 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const updatedIndex = data.content.replace(initRegex, updatedInitContent);
 
 			// Write updated index.ts
-			await container.fetch('http://container/write-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					path: `${workspacePath}/src/index.ts`,
-					content: updatedIndex
-				})
-			});
+			await container.writeFile(`${workspacePath}/src/index.ts`, updatedIndex);
 
 			return {
 				success: true,
@@ -373,16 +300,10 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const id = this.env.MY_CONTAINER.idFromName(containerId);
 			const container = this.env.MY_CONTAINER.get(id);
 
-			const response = await container.fetch('http://container/read-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ path: `${workspacePath}/src/index.ts` })
-			});
+			const data = await container.readFile(`${workspacePath}/src/index.ts`);
 
-			const data = await response.json() as { content?: string; error?: string };
-
-			if (data.error || !data.content) {
-				throw new Error('Failed to read index.ts: ' + data.error);
+			if (!data.success || !data.content) {
+				throw new Error('Failed to read index.ts');
 			}
 
 			const initRegex = /async init\(\) \{([\s\S]*?)\n\t\}/;
@@ -396,14 +317,7 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const updatedInitContent = `async init() {${existingInitContent}\n\n\t\t${resourceCode}\n\t}`;
 			const updatedIndex = data.content.replace(initRegex, updatedInitContent);
 
-			await container.fetch('http://container/write-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					path: `${workspacePath}/src/index.ts`,
-					content: updatedIndex
-				})
-			});
+			await container.writeFile(`${workspacePath}/src/index.ts`, updatedIndex);
 
 			return {
 				success: true,
@@ -429,16 +343,10 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const id = this.env.MY_CONTAINER.idFromName(containerId);
 			const container = this.env.MY_CONTAINER.get(id);
 
-			const response = await container.fetch('http://container/read-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ path: `${workspacePath}/src/index.ts` })
-			});
+			const data = await container.readFile(`${workspacePath}/src/index.ts`);
 
-			const data = await response.json() as { content?: string; error?: string };
-
-			if (data.error || !data.content) {
-				throw new Error('Failed to read index.ts: ' + data.error);
+			if (!data.success || !data.content) {
+				throw new Error('Failed to read index.ts');
 			}
 
 			const initRegex = /async init\(\) \{([\s\S]*?)\n\t\}/;
@@ -452,14 +360,7 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 			const updatedInitContent = `async init() {${existingInitContent}\n\n\t\t${promptCode}\n\t}`;
 			const updatedIndex = data.content.replace(initRegex, updatedInitContent);
 
-			await container.fetch('http://container/write-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					path: `${workspacePath}/src/index.ts`,
-					content: updatedIndex
-				})
-			});
+			await container.writeFile(`${workspacePath}/src/index.ts`, updatedIndex);
 
 			return {
 				success: true,

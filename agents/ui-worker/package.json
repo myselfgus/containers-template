@@ -1,0 +1,51 @@
+{
+	"name": "ui-worker",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"preview": "npm run build && vite preview",
+		"deploy": "npm run build && wrangler deploy",
+		"format": "biome format --write",
+		"lint": "biome lint --error-on-warnings",
+		"lint:fix": "biome lint --fix",
+		"test": "vitest --watch=false",
+		"test:ci": "vitest --watch=false",
+		"cf-typegen": "wrangler types",
+		"type-check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@ai-sdk/openai": "^2.0.42",
+		"@ai-sdk/react": "^2.0.60",
+		"@mantine/charts": "^8.3.3",
+		"@mantine/code-highlight": "^8.3.3",
+		"@mantine/core": "^8.3.3",
+		"@mantine/dates": "^8.3.3",
+		"@mantine/form": "^8.3.3",
+		"@mantine/hooks": "^8.3.3",
+		"@mantine/modals": "^8.3.3",
+		"@mantine/notifications": "^8.3.3",
+		"ai": "^5.0.60",
+		"hono": "^4.9.9",
+		"react": "^19.2.0",
+		"react-dom": "^19.2.0",
+		"recharts": "^3.2.1",
+		"zod": "^3.25.76"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.2.5",
+		"@cloudflare/vite-plugin": "^1.13.10",
+		"@cloudflare/vitest-pool-workers": "^0.9.10",
+		"@types/react": "^19.2.0",
+		"@types/react-dom": "^19.2.0",
+		"@vitejs/plugin-react": "^5.0.4",
+		"postcss": "^8.5.6",
+		"postcss-preset-mantine": "^1.18.0",
+		"postcss-simple-vars": "^7.0.1",
+		"typescript": "5.9.3",
+		"vite": "^7.1.9",
+		"vitest": "~3.2.4",
+		"wrangler": "^4.42.0"
+	}
+}

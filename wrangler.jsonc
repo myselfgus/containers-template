@@ -31,7 +31,6 @@
 		{
 			"binding": "WORKER_PUBLISHER",
 			"service": "worker-publisher",
-			"environment": "production",
 			"entrypoint": "WorkerPublisherRPC"
 		}
 	],
@@ -42,7 +41,8 @@
 		{
 			"class_name": "MyContainer",
 			"image": "./Dockerfile",
-			"max_instances": 10
+			"max_instances": 3,
+			"instance_type": "standard-4"
 		}
 	],
 	"durable_objects": {

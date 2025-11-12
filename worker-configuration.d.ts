@@ -4,6 +4,7 @@
 declare namespace Cloudflare {
 	interface Env {
 		MY_CONTAINER: DurableObjectNamespace<import("./src/index").MyContainer>;
+		DB: D1Database; // Added for container execution tracking
 	}
 }
 interface Env extends Cloudflare.Env {}
