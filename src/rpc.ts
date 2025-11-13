@@ -376,6 +376,91 @@ export class ContainerManagerRPC extends WorkerEntrypoint<Env> {
 	}
 
 	/**
+	 * Execute command in container (RPC method)
+	 * This is the public RPC method that Meta-MCP calls
+	 */
+	async execCommand(containerId: string, command: string, timeout?: number) {
+		try {
+			// Get container instance
+			const id = this.env.MY_CONTAINER.idFromName(containerId);
+			const container = this.env.MY_CONTAINER.get(id);
+
+			// Execute command via container DO
+			const result = await container.execCommand(command);
+
+			return {
+				success: result.success,
+				output: result.output || '',
+				exitCode: result.success ? 0 : 1,
+				error: result.success ? undefined : result.output
+			};
+		} catch (error) {
+			console.error('Failed to execute command:', error);
+			return {
+				success: false,
+				output: '',
+				exitCode: 1,
+				error: error instanceof Error ? error.message : 'Unknown error'
+			};
+		}
+	}
+
+	/**
+	 * Write file to container (RPC method)
+	 * This is the public RPC method that Meta-MCP calls
+	 */
+	async writeFile(containerId: string, path: string, content: string) {
+		try {
+			// Get container instance
+			const id = this.env.MY_CONTAINER.idFromName(containerId);
+			const container = this.env.MY_CONTAINER.get(id);
+
+			// Write file via container DO
+			const result = await container.writeFile(path, content);
+
+			return {
+				success: result.success,
+				bytesWritten: result.success ? content.length : undefined,
+				error: result.success ? undefined : 'Failed to write file'
+			};
+		} catch (error) {
+			console.error('Failed to write file:', error);
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : 'Unknown error'
+			};
+		}
+	}
+
+	/**
+	 * Read file from container (RPC method)
+	 * This is the public RPC method that Meta-MCP calls
+	 */
+	async readFile(containerId: string, path: string) {
+		try {
+			// Get container instance
+			const id = this.env.MY_CONTAINER.idFromName(containerId);
+			const container = this.env.MY_CONTAINER.get(id);
+
+			// Read file via container DO
+			const result = await container.readFile(path);
+
+			return {
+				success: result.success,
+				content: result.content || undefined,
+				size: result.content ? result.content.length : undefined,
+				error: result.success ? undefined : 'Failed to read file'
+			};
+		} catch (error) {
+			console.error('Failed to read file:', error);
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : 'Unknown error'
+			};
+		}
+	}
+
+	/**
 	 * Stop container and clean up resources
 	 */
 	async stopContainer(containerId: string) {
